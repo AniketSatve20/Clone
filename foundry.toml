@@ -1,0 +1,33 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.20"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+
+# Remappings for cleaner imports
+remappings = [
+    "openzeppelin-contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/"
+]
+
+# FIX: Moved fs_permissions inside the [profile.default] block
+fs_permissions = [{ access = "read-write", path = "./"}]
+
+# FIX: Moved gas_reports inside the [profile.default] block
+gas_reports = ["*"]
+
+# Test configuration
+[profile.default.fuzz]
+runs = 256
+
+# RPC endpoints
+[rpc_endpoints]
+hedera_testnet = "https://testnet.hashio.io/api"
+hedera_mainnet = "https://mainnet.hashio.io/api"
+
+# Etherscan configuration (for verification)
+[etherscan]
+hedera_testnet = { key = "${HEDERA_API_KEY}", url = "https://testnet.hashscan.io/api" }
