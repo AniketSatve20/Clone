@@ -11,5 +11,18 @@ export default defineConfig({
         changeOrigin: true,
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Core vendor chunks
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-web3': ['ethers', 'socket.io-client'],
+          'vendor-ui': ['lucide-react', 'axios'],
+        }
+      }
+    },
+    chunkSizeWarningLimit: 1000,
   }
 })

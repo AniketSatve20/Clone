@@ -1,112 +1,144 @@
 import React, { useState, useEffect } from 'react';
-import { ethers } from 'ethers';
-import Dashboard from './components/Dashboard';
-import DisputeHistory from './components/DisputeHistory';
-import UserProfile from './components/UserProfile';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useAuth } from './context/AuthContext';
+import { useWeb3Context } from './context/Web3Context';
 import './App.css';
 
-interface User {
-  address: string;
-  reputation: number;
-  isConnected: boolean;
+// Pages
+import { HomePage } from './pages/HomePage';
+import { AuthPage } from './pages/AuthPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { ProjectsPage } from './pages/ProjectsPage';
+import { DisputesPage } from './pages/DisputesPage';
+
+// Simple Protected Route
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated } = useAuth();
+  
+  if (!isAuthenticated) {
+    return <Navigate to="/auth" replace />;
+  }
+  
+  return <>{children}</>;
 }
 
-export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'disputes' | 'profile'>('dashboard');
-
-  useEffect(() => {
-    connectWallet();
-  }, []);
-
-  const connectWallet = async () => {
-    try {
-      if (!window.ethereum) {
-        alert('Please install MetaMask');
-        return;
-      }
-
-      const accounts = await window.ethereum.request({
-        method: 'eth_requestAccounts',
-      });
-
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-
-      setUser({
-        address,
-        reputation: 0,
-        isConnected: true,
-      });
-
-      // Fetch user reputation
-      fetchUserReputation(address);
-    } catch (error) {
-      console.error('Failed to connect wallet:', error);
-    }
-  };
-
-  const fetchUserReputation = async (address: string) => {
-    try {
-      const response = await fetch(`http://localhost:3000/api/users/${address}/reputation`);
-      const data = await response.json();
-      setUser(prev => prev ? { ...prev, reputation: data.reputation_score || 0 } : null);
-    } catch (error) {
-      console.error('Failed to fetch reputation:', error);
-    }
-  };
+// Navigation Component
+function Navigation() {
+  const { user, logout } = useAuth();
+  const { wallet, connectWallet } = useWeb3Context();
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   return (
-    <div className="app">
-      <header className="header">
-        <div className="header-content">
-          <h1>🏗️ HumanWork Protocol</h1>
-          <div className="wallet-info">
-            {user?.isConnected ? (
-              <div className="connected">
-                <span className="address">{user.address.slice(0, 6)}...{user.address.slice(-4)}</span>
-                <span className="reputation">⭐ {user.reputation}</span>
-              </div>
+    <nav className="navbar">
+      <div className="nav-container">
+        <div className="nav-logo">
+          <h1>HumanWork</h1>
+        </div>
+
+        <div className="nav-links">
+          <a href="/dashboard" className="nav-link">Dashboard</a>
+          <a href="/projects" className="nav-link">Projects</a>
+          <a href="/disputes" className="nav-link">Disputes</a>
+        </div>
+
+        <div className="nav-right">
+          {/* Web3 Connection Status */}
+          <div className="web3-status">
+            {wallet && wallet.isConnected ? (
+              <>
+                <span className="status-indicator connected"></span>
+                <span className="status-text">
+                  {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
+                </span>
+              </>
             ) : (
-              <button onClick={connectWallet} className="connect-btn">
-                Connect Wallet
-              </button>
+              <>
+                <span className="status-indicator disconnected"></span>
+                <span className="status-text">Disconnected</span>
+              </>
+            )}
+          </div>
+
+          {/* User Menu */}
+          <div className="user-menu">
+            <button 
+              className="user-button"
+              onClick={() => setShowUserMenu(!showUserMenu)}
+            >
+              {user?.email || 'Menu'}
+            </button>
+            
+            {showUserMenu && (
+              <div className="user-dropdown">
+                <button onClick={() => {
+                  connectWallet();
+                  setShowUserMenu(false);
+                }}>
+                  {wallet && wallet.isConnected ? 'Switch Account' : 'Connect Wallet'}
+                </button>
+                <button onClick={() => {
+                  logout();
+                  setShowUserMenu(false);
+                }}>
+                  Logout
+                </button>
+              </div>
             )}
           </div>
         </div>
-      </header>
+      </div>
+    </nav>
+  );
+}
 
-      <nav className="nav">
-        <button
-          className={`nav-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
-        >
-          📊 Dashboard
-        </button>
-        <button
-          className={`nav-btn ${activeTab === 'disputes' ? 'active' : ''}`}
-          onClick={() => setActiveTab('disputes')}
-        >
-          ⚖️ Disputes
-        </button>
-        <button
-          className={`nav-btn ${activeTab === 'profile' ? 'active' : ''}`}
-          onClick={() => setActiveTab('profile')}
-        >
-          👤 Profile
-        </button>
-      </nav>
+// Main App Layout
+function AppLayout() {
+  const { isAuthenticated } = useAuth();
 
-      <main className="main">
-        {activeTab === 'dashboard' && <Dashboard />}
-        {activeTab === 'disputes' && <DisputeHistory />}
-        {activeTab === 'profile' && user && <UserProfile user={user} />}
+  return (
+    <div className="app">
+      {isAuthenticated && <Navigation />}
+      
+      <main className="main-content">
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/auth" element={<AuthPage />} />
+          <Route 
+            path="/dashboard" 
+            element={
+              <ProtectedRoute>
+                <DashboardPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/projects" 
+            element={
+              <ProtectedRoute>
+                <ProjectsPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/disputes" 
+            element={
+              <ProtectedRoute>
+                <DisputesPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </main>
-
-      <footer className="footer">
-        <p>© 2024 HumanWork Protocol - Decentralized Dispute Resolution</p>
-      </footer>
     </div>
+  );
+}
+
+// Main App Component
+export default function App() {
+  return (
+    <Router>
+      <AppLayout />
+    </Router>
   );
 }
