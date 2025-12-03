@@ -53,7 +53,7 @@ contract IntegrationTest is Test {
         projectEscrow = new ProjectEscrow(address(usdc), address(userRegistry), address(agencyRegistry), address(enterpriseAccess));
         
         // Set permissions
-        agencyRegistry.setAIOracle(address(aiOracle));
+        agencyRegistry.setAiOracle(address(aiOracle));
         userRegistry.setAuthorizedCaller(address(projectEscrow), true);
         userRegistry.setAuthorizedCaller(address(skillTrial), true);
         projectEscrow.setDisputeJuryAddress(address(disputeJury));

@@ -12,14 +12,20 @@ import "../src/DisputeJury.sol";
 import "../src/GasSponsor.sol";
 import "../src/InsurancePool.sol";
 
+// Import Mocks
+import "../src/mocks/MockUSDC.sol";
+import "../src/mocks/MockVerifier.sol";
+
 contract DeployProtocol is Script {
-    // --- FIX: Replaced 0x... with address(0) as a placeholder ---
-    address public constant STABLECOIN_ADDRESS = address(0); // REPLACE
-    address public constant ZK_VERIFIER_ADDRESS = address(0); // REPLACE
-    
-    // This will be your backend/admin wallet that controls the AI Oracle
-    // and other admin functions.
+    address public STABLECOIN_ADDRESS;
+    address public ZK_VERIFIER_ADDRESS;
     address public oracleAdmin; 
+
+    // DEMO ACCOUNTS: Using correct checksums to satisfy compiler
+    // Client: 0xbe19... -> Checksum: 0xBe19FFa61889b67802F4ff9E7Cb01Dd17105C05f
+    address public demoClient = 0xBe19FFa61889b67802F4ff9E7Cb01Dd17105C05f; 
+    // Freelancer: 0x9aaa... -> Checksum: 0x9aaa47E69eB507a4510bbC7Ba745A5BBeA6c718c
+    address public demoFreelancer = 0x9aaa47E69eB507a4510bbC7Ba745A5BBeA6c718c;
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -27,9 +33,19 @@ contract DeployProtocol is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // ============ 1. DEPLOY CORE MODULES ============
-        console.log("Deploying Core Modules...");
+        // ============ 0. DEPLOY MOCKS (TESTNET ONLY) ============
+        console.log("Deploying Mocks...");
+        
+        MockUSDC mockUSDC = new MockUSDC();
+        STABLECOIN_ADDRESS = address(mockUSDC);
+        console.log("  + MockUSDC deployed to:", STABLECOIN_ADDRESS);
+        
+        MockVerifier mockVerifier = new MockVerifier();
+        ZK_VERIFIER_ADDRESS = address(mockVerifier);
+        console.log("  + MockVerifier deployed to:", ZK_VERIFIER_ADDRESS);
 
+        // ============ 1. DEPLOY CORE MODULES ============
+        console.log("\nDeploying Core Modules...");
         GasSponsor gasSponsor = new GasSponsor(STABLECOIN_ADDRESS);
         console.log("  + GasSponsor deployed to:", address(gasSponsor));
 
@@ -38,7 +54,6 @@ contract DeployProtocol is Script {
 
         // ============ 2. DEPLOY IDENTITY & AI LAYER (L1) ============
         console.log("\nDeploying Identity & AI Layer (L1)...");
-
         UserRegistry userRegistry = new UserRegistry(
             ZK_VERIFIER_ADDRESS,
             STABLECOIN_ADDRESS,
@@ -52,19 +67,21 @@ contract DeployProtocol is Script {
         );
         console.log("  + AgencyRegistry deployed to:", address(agencyRegistry));
 
-        AIOracle aiOracle = new AIOracle();
+        AIOracle aiOracle = new AIOracle(
+            address(agencyRegistry),
+            address(0) 
+        );
         console.log("  + AIOracle deployed to:", address(aiOracle));
 
         SkillTrial skillTrial = new SkillTrial(
             STABLECOIN_ADDRESS,
-            address(aiOracle),
-            address(userRegistry)
+            address(userRegistry),
+            address(aiOracle) 
         );
         console.log("  + SkillTrial deployed to:", address(skillTrial));
 
         // ============ 3. DEPLOY COMMERCE & DISPUTE LAYER (L2) ============
         console.log("\nDeploying Commerce & Dispute Layer (L2)...");
-
         DisputeJury disputeJury = new DisputeJury(
             STABLECOIN_ADDRESS,
             address(userRegistry)
@@ -72,7 +89,8 @@ contract DeployProtocol is Script {
         console.log("  + DisputeJury deployed to:", address(disputeJury));
 
         EnterpriseAccess enterpriseAccess = new EnterpriseAccess(
-            STABLECOIN_ADDRESS
+            STABLECOIN_ADDRESS,
+            address(agencyRegistry) 
         );
         console.log("  + EnterpriseAccess deployed to:", address(enterpriseAccess));
 
@@ -80,56 +98,96 @@ contract DeployProtocol is Script {
             STABLECOIN_ADDRESS,
             address(userRegistry),
             address(agencyRegistry),
-            address(enterpriseAccess),
-            address(disputeJury),
-            address(aiOracle)
+            address(enterpriseAccess)
         );
         console.log("  + ProjectEscrow deployed to:", address(projectEscrow));
 
         // ============ 4. SET PERMISSIONS & AUTHORIZATIONS ============
         console.log("\nSetting Permissions & Authorizations...");
+        
+        // FIX: Set SkillTrial address BEFORE transferring ownership
+        // Because after transfer, deployer is no longer owner
+        aiOracle.setSkillTrial(address(skillTrial)); 
+        console.log("  + AIOracle updated with SkillTrial address");
 
-        // --- AIOracle (The Brain) ---
-        // 1. Set the Oracle's admin/owner (your backend server)
+        // Now transfer ownership to the backend worker
         aiOracle.transferOwnership(oracleAdmin);
         console.log("  + AIOracle ownership transferred to:", oracleAdmin);
-        // 2. Authorize AIOracle to call AgencyRegistry
-        aiOracle.setCallbackAddress(address(agencyRegistry), true);
-        console.log("  + AIOracle updated with AgencyRegistry");
-        // 3. Authorize AIOracle to call SkillTrial
-        aiOracle.setCallbackAddress(address(skillTrial), true);
-        console.log("  + AIOracle updated with SkillTrial");
-        // 4. Authorize AIOracle to call ProjectEscrow (for dispute reports)
-        aiOracle.setCallbackAddress(address(projectEscrow), true);
-        console.log("  + AIOracle updated with ProjectEscrow");
 
-        // --- AgencyRegistry (B2B Identity) ---
-        // Authorize the AIOracle to set GST verification status
-        agencyRegistry.setAIOracle(address(aiOracle));
+        agencyRegistry.setAiOracle(address(aiOracle));
         console.log("  + AgencyRegistry updated with AIOracle");
 
-        // --- SkillTrial (Vetting) ---
-        // Authorize the AIOracle to mint badges
-        skillTrial.setAuthorizedOracle(address(aiOracle));
+        skillTrial.setAiOracle(address(aiOracle)); 
         console.log("  + SkillTrial updated with AIOracle");
 
-        // --- UserRegistry (Attestations) ---
-        // 1. Authorize ProjectEscrow to add PROJECT attestations
+        disputeJury.setProjectEscrowAddress(address(projectEscrow)); 
+        console.log("  + DisputeJury updated with ProjectEscrow");
+
+        projectEscrow.setDisputeJuryAddress(address(disputeJury));
+        console.log("  + ProjectEscrow updated with DisputeJury");
+
         userRegistry.setAuthorizedCaller(address(projectEscrow), true);
         console.log("  + UserRegistry updated for ProjectEscrow");
-        // 2. Authorize SkillTrial to add SKILL attestations
+        
         userRegistry.setAuthorizedCaller(address(skillTrial), true);
         console.log("  + UserRegistry updated for SkillTrial");
 
-        // --- ProjectEscrow (Commerce) ---
-        // Authorize ProjectEscrow to create Attestations
-        projectEscrow.setAuthorizedCaller(address(userRegistry), true);
-        console.log("  + ProjectEscrow updated with UserRegistry");
-
-        // --- GasSponsor ---
-        // Authorize UserRegistry to receive deposits
         gasSponsor.authorizeContract(address(userRegistry), true);
         console.log("  + GasSponsor updated for UserRegistry");
+
+        // ============ 5. SEED INITIAL DATA (USERS) ============
+        console.log("\nSeeding Initial Users...");
+        
+        // A. Fund Demo Accounts
+        mockUSDC.mint(demoClient, 50000 * 10**6);
+        console.log("  + Minted 50,000 USDC to Demo Client:", demoClient);
+        
+        mockUSDC.mint(demoFreelancer, 10000 * 10**6);
+        console.log("  + Minted 10,000 USDC to Demo Freelancer:", demoFreelancer);
+
+        mockUSDC.mint(msg.sender, 100000 * 10**6);
+        console.log("  + Minted 100,000 USDC to Deployer");
+
+        // B. Auto-Onboard Deployer (Super User Setup)
+        userRegistry.registerBasic();
+        
+        bytes memory emptyProof = new bytes(0);
+        uint256[] memory emptySignals = new uint256[](0);
+        userRegistry.verifyHuman(emptyProof, emptySignals);
+        console.log("  + Deployer registered & verified as Human");
+
+        mockUSDC.approve(address(agencyRegistry), 500 * 10**6);
+        agencyRegistry.registerAgency("TechCorp Solutions", keccak256("GST123456789"));
+        console.log("  + Deployer registered 'TechCorp Solutions' Agency");
+
+        // ============ 6. SEED SKILL TESTS (PRODUCTS) ============
+        console.log("\nSeeding Skill Tests (Vetting Engine)...");
+
+        // Test 1: Junior Solidity ($10)
+        skillTrial.createTest(
+            "Junior Solidity Developer", 
+            "Basic syntax, security patterns, and ERC standards.", 
+            "QmJuniorSolidityHash", // Placeholder IPFS Hash
+            10 * 10**6 // 10 USDC
+        );
+
+        // Test 2: Smart Contract Security ($25)
+        skillTrial.createTest(
+            "Smart Contract Security Auditor", 
+            "Reentrancy, overflow, and gas optimization.", 
+            "QmSecurityHash", 
+            25 * 10**6 // 25 USDC
+        );
+
+        // Test 3: DeFi Protocol Design ($50)
+        skillTrial.createTest(
+            "DeFi Protocol Architect", 
+            "AMM logic, lending pools, and flash loans.", 
+            "QmDeFiHash", 
+            50 * 10**6 // 50 USDC
+        );
+        
+        console.log("  + Created 3 Skill Tests");
 
         vm.stopBroadcast();
         

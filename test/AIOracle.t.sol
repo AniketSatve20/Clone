@@ -35,8 +35,8 @@ contract AIOracleTest is Test {
         aiOracle = new AIOracle(address(agencyRegistry), address(skillTrial));
 
         aiOracle.transferOwnership(backendServer);
-        agencyRegistry.setAIOracle(address(aiOracle));
-        skillTrial.setAIOracle(address(aiOracle));
+        agencyRegistry.setAiOracle(address(aiOracle));
+        skillTrial.setAiOracle(address(aiOracle));
     }
 
     function testOwner() public view { 

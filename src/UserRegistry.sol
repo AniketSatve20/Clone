@@ -169,7 +169,7 @@ contract UserRegistry is Ownable {
      * @notice Link ENS name to profile
      * @param ensName ENS name (e.g., "alice.eth")
      */
-    function linkENS(string memory ensName) external {
+    function linkEns(string memory ensName) external {
         if (users[msg.sender].level == LegitimacyLevel.None) {
             revert NotBasicUser();
         }
@@ -321,7 +321,7 @@ contract UserRegistry is Ownable {
         emit AuthorizedCallerUpdated(caller, status);
     }
     
-    function updateZKVerifier(address _newVerifier) external onlyOwner {
+    function updateZkVerifier(address _newVerifier) external onlyOwner {
         zkVerifier = IZKVerifier(_newVerifier);
     }
     

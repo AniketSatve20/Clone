@@ -24,6 +24,27 @@ Thumbs.db
 # Logs
 *.log
 logs/
+backend/logs/
 
 # Testing
 coverage/
+
+# Build artifacts
+dist/
+build/
+*.tmp
+
+# Secrets
+.env.*.private
+secrets/
+
+# Database
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local

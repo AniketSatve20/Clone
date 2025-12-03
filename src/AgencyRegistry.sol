@@ -235,7 +235,7 @@ contract AgencyRegistry is Ownable, ReentrancyGuard {
     
     // ============ Admin Functions ============
     
-    function setAIOracle(address _aiOracle) external onlyOwner {
+    function setAiOracle(address _aiOracle) external onlyOwner {
         aiOracleAddress = _aiOracle;
     }
     

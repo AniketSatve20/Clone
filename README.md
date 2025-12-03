@@ -1,124 +1,117 @@
-# HumanWork Protocol (HWP)
+# Human Work Protocol - Freelancing Platform
 
-> The Verifiable Commerce Layer for B2B Services
+A decentralized freelancing platform built on Hedera with AI-powered dispute resolution and smart contract escrow.
 
-**Zero Fees. Maximum Trust. Powered by ZK + AI.**
+## 🎯 Features
 
-## Table of Contents
-- [Executive Summary](#executive-summary)
-- [Competitive Moat](#competitive-moat)
-- [Architecture](#architecture)
-- [Technical Implementation](#technical-implementation)
-- [Development](#development)
-- [Deployment](#deployment)
-- [Economics](#economics)
+- **Smart Contract Escrow**: Secure milestone-based payments
+- **AI-Powered Dispute Resolution**: Automated conflict resolution with AI-PM
+- **User Registry**: Track freelancers and clients
+- **Mock Stablecoin**: Test payments with MockUSDC
+- **Jury System**: Dispute resolution with jury voting
 
-## Executive Summary
+## 📋 Prerequisites
 
-HumanWork Protocol eliminates the **40% total cost** of traditional B2B freelancing by replacing intermediary trust with cryptographic proof. Our protocol delivers:
+- [Foundry](https://book.getfoundry.sh/getting-started/installation)
+- [Cast](https://book.getfoundry.sh/cast/) (comes with Foundry)
+- Hedera Testnet account with balance
+- Node.js 16+ (for backend)
 
-- **0% Transaction Fees** (vs. 20% on Upwork)
-- **99.9% Trust Verification** via ZK-KYC + AI
-- **48-Hour Dispute Resolution** powered by AI
-- **Enterprise-Grade Compliance** for Fortune 500 clients
+## 🚀 Quick Start
 
-## Competitive Moat
+### 1. Clone & Setup
 
-### 1. AI Vetting Engine
-- **Contracts**: `SkillTrial.sol`, `AIOracle.sol`
-- Replaces subjective resumes with quantifiable on-chain skill proofs
-- AI-grades actual work output, not just claims
-- Perfect for India GTM: Objectively verify 8.5M developers
-
-### 2. B2B Identity & Compliance 
-- **Contracts**: `AgencyRegistry.sol`, `UserRegistry.sol`
-- ZK-proof verified humans (privacy-preserving KYC)
-- GST-verified agencies (registered businesses)
-- Cross-border compliance automation
-
-### 3. Dual-Sided SaaS Model
-- **Contract**: `EnterpriseAccess.sol`
-- Clients: $500/month or $5,000/year 
-- Agencies: $100/month or $1,000/year
-- Zero escrow fees = massive competitive advantage
-
-### 4. Dynamic Escrow & Protection
-- **Contract**: `ProjectEscrow.sol`
-- AI-powered scope creep detection
-- Dynamic milestone adjustment
-- Smart contract-enforced IP protection
-
-## Architecture
-
-| Contract | Core Function | V2 Upgrade Focus |
-|----------|--------------|------------------|
-| UserRegistry | Human ZK-KYC & Attestations | Attestation Hub |
-| AgencyRegistry | Business Verification | Multi-Chain Support |
-| ProjectEscrow | B2B Payment & Milestones | Dynamic Escrow |
-| SkillTrial | AI Skill Verification | Skill NFTs |
-| AIOracle | Verification Brain | Cross-Chain Oracle |
-| DisputeJury | Decentralized Court | DAO Governance |
-| EnterpriseAccess | SaaS Subscriptions | Enterprise Tools |
-| GasSponsor | Gas-less UX | Meta Transactions |
-| InsurancePool | Work Coverage | Risk Analytics |
-
-## Technical Implementation
-
-### Prerequisites
-- Foundry
-- Node.js v18+
-- Git
-
-### Quick Start
 ```bash
-# Install
-git clone https://github.com/humanwork/protocol
-cd protocol
+git clone <your-repo>
+cd HumanWorkProtocol
+cp .env.local.example .env.local  # Create local config
 make install
+make build
+```
 
-# Configure
-cp .env.example .env
+### 2. Configure Environment
 
-# Test
-make test  # 36 Integration Tests
+Edit `.env.local` with your credentials:
+```bash
+PRIVATE_KEY=your_hedera_private_key
+ORACLE_ADDRESS=0x...your_oracle_address
+```
 
-# Deploy
+### 3. Deploy Contracts
+
+```bash
 make deploy-testnet
 ```
 
-### Testing Coverage
-- 36 Integration Tests
-- 10 Contract Suites
-- 100% Core Function Coverage
-- Gas Optimization Verified
-
-## Deployment
-
-Automated deployment orchestration via `Deploy.s.sol`:
-1. Core Contracts (9)
-2. Cross-Contract Authorization
-3. Oracle Configuration
-4. Admin Permission Setup
-
-### Contract Addresses (Testnet)
+After deployment, update contract addresses in `.env.local`:
 ```
-Addresses saved to: deployments/hedera_testnet.json
+AI_ORACLE_CONTRACT_ADDRESS=0x...
+STABLECOIN_ADDRESS=0x...
 ```
 
-## Economics
+### 4. Run System Test
 
-**Revenue Streams (Y1 Targets)**
-- Enterprise SaaS: $2.4M
-- Agency SaaS: $600K
-- Insurance: $350K
+```bash
+chmod +x test_system.sh
+./test_system.sh
+```
 
-**Total Revenue**: $3.35M
-**Margin**: 89%
+## 📚 Documentation
 
-## Links
-- [Documentation](https://docs.humanwork.io)
-- [Integration Guide](https://docs.humanwork.io/integration)
-- [Security Audit](https://docs.humanwork.io/audit)
+- [SETUP.md](./SETUP.md) - Detailed setup instructions
+- [DEPLOYMENT.md](./DEPLOYMENT.md) - Deployment guide
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - System architecture
 
-## License
+## 🧪 Testing
+
+```bash
+make test          # Run all tests
+make gas-report    # Generate gas usage report
+make fmt           # Format code
+make lint          # Lint Solidity
+```
+
+## 📁 Project Structure
+
+```
+HumanWorkProtocol/
+├── contracts/          # Solidity smart contracts
+├── script/            # Deployment scripts
+├── test/              # Test files
+├── backend/           # Backend AI service
+├── makefile           # Build commands
+├── .env              # Environment template (commit)
+├── .env.local        # Local secrets (DO NOT commit)
+└── test_system.sh    # System integration test
+```
+
+## 🔑 Security
+
+- ⚠️ **Never commit `.env.local`** - contains private keys
+- Use environment variables in production
+- Keep Hedera private keys safe
+- Validate all inputs in smart contracts
+
+## 🔗 Network Info
+
+- **Network**: Hedera Testnet
+- **RPC Endpoint**: https://testnet.hashio.io/api
+- **Explorer**: https://testnet.hashscan.io/
+
+## 📝 License
+
 MIT
+
+## 🤝 Contributing
+
+1. Create feature branch
+2. Make changes
+3. Run `make fmt && make lint && make test`
+4. Submit pull request
+
+## 📞 Support
+
+For issues, check:
+- [Hedera Docs](https://docs.hedera.com/)
+- [Foundry Book](https://book.getfoundry.sh/)
+- Project issues page

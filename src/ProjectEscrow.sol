@@ -15,7 +15,7 @@ import "./EnterpriseAccess.sol";
 contract ProjectEscrow is ReentrancyGuard {
     // ============ State Variables ============
     
-    IERC20 public immutable stablecoin;
+    IERC20 public immutable STABLECOIN;
     UserRegistry public immutable userRegistry;
     AgencyRegistry public immutable agencyRegistry;
     EnterpriseAccess public enterpriseAccess;
@@ -92,7 +92,7 @@ contract ProjectEscrow is ReentrancyGuard {
         address _agencyRegistry,
         address _enterpriseAccess
     ) {
-        stablecoin = IERC20(_stablecoin);
+        STABLECOIN = IERC20(_stablecoin);
         userRegistry = UserRegistry(_userRegistry);
         agencyRegistry = AgencyRegistry(_agencyRegistry);
         enterpriseAccess = EnterpriseAccess(_enterpriseAccess);
@@ -125,7 +125,7 @@ contract ProjectEscrow is ReentrancyGuard {
         }
 
         require(
-            stablecoin.transferFrom(msg.sender, address(this), totalAmount),
+            STABLECOIN.transferFrom(msg.sender, address(this), totalAmount),
             "Token transfer failed"
         );
 
@@ -157,7 +157,7 @@ contract ProjectEscrow is ReentrancyGuard {
         if (amount == 0) revert InvalidAmount();
 
         require(
-            stablecoin.transferFrom(msg.sender, address(this), amount),
+            STABLECOIN.transferFrom(msg.sender, address(this), amount),
             "Token transfer failed"
         );
 
@@ -198,7 +198,7 @@ contract ProjectEscrow is ReentrancyGuard {
         proj.amountPaid += milestone.amount;
 
         require(
-            stablecoin.transfer(proj.freelancer, milestone.amount),
+            STABLECOIN.transfer(proj.freelancer, milestone.amount),
             "Payment failed"
         );
 
@@ -228,7 +228,7 @@ contract ProjectEscrow is ReentrancyGuard {
         proj.status = ProjectStatus.Cancelled;
         
         if (refundAmount > 0) {
-            require(stablecoin.transfer(proj.client, refundAmount), "Refund failed");
+            require(STABLECOIN.transfer(proj.client, refundAmount), "Refund failed");
         }
         
         emit ProjectCancelled(projectId, msg.sender, "Client cancelled");
@@ -249,7 +249,7 @@ contract ProjectEscrow is ReentrancyGuard {
         proj.status = ProjectStatus.Cancelled;
         
         if (refundAmount > 0) {
-            require(stablecoin.transfer(proj.client, refundAmount), "Refund failed");
+            require(STABLECOIN.transfer(proj.client, refundAmount), "Refund failed");
         }
 
         // V5 Integration: Add NEGATIVE attestation

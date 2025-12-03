@@ -106,7 +106,7 @@ contract UserRegistryTest is Test {
         userRegistry.registerBasic();
         
         vm.prank(alice);
-        userRegistry.linkENS("alice.eth");
+        userRegistry.linkEns("alice.eth");
         
         (,string memory ensName,,) = userRegistry.getUserProfile(alice);
         assertEq(ensName, "alice.eth");

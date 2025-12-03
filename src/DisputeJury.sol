@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import "openzeppelin-contracts/contracts/access/Ownable.sol";
 import "./UserRegistry.sol";
 
 /**
@@ -10,11 +11,11 @@ import "./UserRegistry.sol";
  * @notice Decentralized jury with AI-PM report as primary evidence
  * @dev Court of appeals with 3-way voting (AcceptAI, SideWithClient, SideWithFreelancer)
  */
-contract DisputeJury is ReentrancyGuard {
+contract DisputeJury is ReentrancyGuard, Ownable {
     // ============ State Variables ============
     
-    IERC20 public immutable stablecoin;
-    UserRegistry public immutable userRegistry;
+    IERC20 public immutable STABLECOIN;
+    UserRegistry public immutable USER_REGISTRY;
     address public projectEscrowAddress;
     
     uint256 public constant MIN_STAKE = 100 * 10**6; // 100 USDC
@@ -44,8 +45,8 @@ contract DisputeJury is ReentrancyGuard {
         uint256 amount;
         address[] jurors;
         mapping(address => bool) hasVoted;
-        mapping(address => VoteChoice) votes;  // Store actual vote choices
-        uint256 votesAcceptAI;
+        mapping(address => VoteChoice) votes;
+        uint256 votesAcceptAi;
         uint256 votesForClient;
         uint256 votesForFreelancer;
         DisputeOutcome outcome;
@@ -53,7 +54,7 @@ contract DisputeJury is ReentrancyGuard {
         uint256 resolvedAt;
         bool fundsDistributed;
         string aiReport;
-        uint8 aiRecommendedSplit;  // 0-100 percentage for freelancer
+        uint8 aiRecommendedSplit;
     }
     
     struct JurorInfo {
@@ -67,7 +68,11 @@ contract DisputeJury is ReentrancyGuard {
     
     mapping(uint256 => Dispute) public disputes;
     mapping(address => JurorInfo) public jurors;
+    
+    // OPTIMIZATION: Efficient Array Management
     address[] public activeJurors;
+    // Tracks index in array for O(1) removal. 
+    mapping(address => uint256) public jurorIndices; 
     
     // ============ Events ============
     
@@ -90,31 +95,38 @@ contract DisputeJury is ReentrancyGuard {
     error DisputeNotResolved();
     error FundsAlreadyDistributed();
     error NotEnoughJurors();
+    error Unauthorized();
     
     // ============ Constructor ============
     
-    constructor(address _stablecoin, address _userRegistry) {
-        stablecoin = IERC20(_stablecoin);
-        userRegistry = UserRegistry(_userRegistry);
+    constructor(address _stablecoin, address _userRegistry) Ownable(msg.sender) {
+        STABLECOIN = IERC20(_stablecoin);
+        USER_REGISTRY = UserRegistry(_userRegistry);
     }
     
     // ============ Juror Management ============
     
     function stakeAsJuror(uint256 amount) external nonReentrant {
-        if (!userRegistry.isVerifiedHuman(msg.sender)) revert NotVerifiedHuman();
+        if (!USER_REGISTRY.isVerifiedHuman(msg.sender)) revert NotVerifiedHuman();
         if (amount < MIN_STAKE) revert InsufficientStake();
         
-        require(stablecoin.transferFrom(msg.sender, address(this), amount), "Stake transfer failed");
+        require(STABLECOIN.transferFrom(msg.sender, address(this), amount), "Stake transfer failed");
         
         JurorInfo storage juror = jurors[msg.sender];
         
-        if (juror.stakedAmount == 0) {
+        // If not already active, add to array
+        if (!juror.isActive) {
+            // Optimization: Store the new index in the mapping
+            jurorIndices[msg.sender] = activeJurors.length;
             activeJurors.push(msg.sender);
-            juror.reputationScore = 100; // Starting reputation
+            
+            if (juror.reputationScore == 0) {
+                juror.reputationScore = 100; // Starting reputation
+            }
+            juror.isActive = true;
         }
         
         juror.stakedAmount += amount;
-        juror.isActive = true;
         
         emit JurorStaked(msg.sender, amount);
     }
@@ -124,12 +136,36 @@ contract DisputeJury is ReentrancyGuard {
         if (juror.stakedAmount < amount) revert InsufficientStake();
         
         juror.stakedAmount -= amount;
-        if (juror.stakedAmount < MIN_STAKE) {
+        
+        // If stake falls below minimum, remove from active pool
+        if (juror.stakedAmount < MIN_STAKE && juror.isActive) {
+            _removeJuror(msg.sender);
             juror.isActive = false;
         }
         
-        require(stablecoin.transfer(msg.sender, amount), "Unstake transfer failed");
+        require(STABLECOIN.transfer(msg.sender, amount), "Unstake transfer failed");
         emit JurorUnstaked(msg.sender, amount);
+    }
+
+    /**
+     * @dev Optimization: Removes a juror from the active array in O(1) time.
+     * Moves the last element to the deleted spot and then pops the last element.
+     */
+    function _removeJuror(address jurorToRemove) internal {
+        uint256 index = jurorIndices[jurorToRemove];
+        uint256 lastIndex = activeJurors.length - 1;
+
+        // If the element to remove is not the last one, swap it with the last one
+        if (index != lastIndex) {
+            address lastJuror = activeJurors[lastIndex];
+            
+            activeJurors[index] = lastJuror; // Move the last juror to the slot of the removed juror
+            jurorIndices[lastJuror] = index; // Update the index of the moved juror
+        }
+
+        // Remove the last element
+        activeJurors.pop();
+        delete jurorIndices[jurorToRemove]; // Clean up the mapping
     }
     
     // ============ Dispute Management ============
@@ -142,6 +178,9 @@ contract DisputeJury is ReentrancyGuard {
         uint256 amount
     ) external returns (uint256) {
         require(msg.sender == projectEscrowAddress, "Only ProjectEscrow");
+        
+        // Note: For Hackathon demo, you might want to comment out this check 
+        // if you don't have 5 jurors staked yet!
         if (activeJurors.length < JURORS_PER_CASE) revert NotEnoughJurors();
         
         uint256 disputeId = disputeCounter++;
@@ -154,8 +193,7 @@ contract DisputeJury is ReentrancyGuard {
         dispute.amount = amount;
         dispute.outcome = DisputeOutcome.Pending;
         dispute.createdAt = block.timestamp;
-        dispute.fundsDistributed = false;
-        dispute.aiRecommendedSplit = 50; // Default 50/50 if no AI report
+        dispute.aiRecommendedSplit = 50; // Default 50/50
         
         dispute.jurors = _selectJurors();
         
@@ -164,30 +202,27 @@ contract DisputeJury is ReentrancyGuard {
         return disputeId;
     }
     
-    /**
-     * @notice V5: Submit evidence including AI-PM report
-     */
     function submitEvidence(uint256 disputeId, string memory evidence) external {
         Dispute storage dispute = disputes[disputeId];
         require(msg.sender == dispute.client || msg.sender == dispute.freelancer, "Not party to dispute");
-        
         emit EvidenceSubmitted(disputeId, evidence, dispute.aiReport);
     }
     
     /**
-     * @notice V5: Set AI report (called by AIOracle or ProjectEscrow)
+     * @notice V5: Set AI report
+     * @dev FIXED: Now allows Owner (Admin/AI) OR ProjectEscrow to set the report
      */
-    function setAIReport(uint256 disputeId, string memory report, uint8 recommendedSplit) external {
-        require(msg.sender == projectEscrowAddress, "Only ProjectEscrow");
+    function setAiReport(uint256 disputeId, string memory report, uint8 recommendedSplit) external {
+        // FIX: Check for Owner OR ProjectEscrow
+        if (msg.sender != projectEscrowAddress && msg.sender != owner()) {
+            revert Unauthorized();
+        }
         
         Dispute storage dispute = disputes[disputeId];
         dispute.aiReport = report;
         dispute.aiRecommendedSplit = recommendedSplit;
     }
     
-    /**
-     * @notice V5: Cast vote with 3 choices
-     */
     function castVote(uint256 disputeId, VoteChoice choice) external {
         Dispute storage dispute = disputes[disputeId];
         
@@ -199,7 +234,7 @@ contract DisputeJury is ReentrancyGuard {
         dispute.votes[msg.sender] = choice;
         
         if (choice == VoteChoice.AcceptAI) {
-            dispute.votesAcceptAI++;
+            dispute.votesAcceptAi++;
         } else if (choice == VoteChoice.SideWithClient) {
             dispute.votesForClient++;
         } else {
@@ -209,7 +244,7 @@ contract DisputeJury is ReentrancyGuard {
         emit VoteCast(disputeId, msg.sender, choice);
         
         // Auto-tally if all voted
-        uint256 totalVotes = dispute.votesAcceptAI + dispute.votesForClient + dispute.votesForFreelancer;
+        uint256 totalVotes = dispute.votesAcceptAi + dispute.votesForClient + dispute.votesForFreelancer;
         if (totalVotes == JURORS_PER_CASE) {
             _tallyVotes(disputeId);
         }
@@ -229,9 +264,8 @@ contract DisputeJury is ReentrancyGuard {
     function _tallyVotes(uint256 disputeId) internal {
         Dispute storage dispute = disputes[disputeId];
         
-        // Determine outcome based on majority
-        if (dispute.votesAcceptAI >= dispute.votesForClient && 
-            dispute.votesAcceptAI >= dispute.votesForFreelancer) {
+        if (dispute.votesAcceptAi >= dispute.votesForClient && 
+            dispute.votesAcceptAi >= dispute.votesForFreelancer) {
             dispute.outcome = DisputeOutcome.AcceptAISplit;
         } else if (dispute.votesForClient > dispute.votesForFreelancer) {
             dispute.outcome = DisputeOutcome.ClientWins;
@@ -253,7 +287,7 @@ contract DisputeJury is ReentrancyGuard {
         dispute.fundsDistributed = true;
         
         uint256 totalAmount = dispute.amount;
-        uint256 jurorReward = totalAmount / 10; // 10% to jurors
+        uint256 jurorReward = totalAmount / 10; 
         uint256 perJurorReward = jurorReward / JURORS_PER_CASE;
         uint256 winnerAmount = totalAmount - jurorReward;
         
@@ -263,21 +297,19 @@ contract DisputeJury is ReentrancyGuard {
         } else if (dispute.outcome == DisputeOutcome.FreelancerWins) {
             winner = dispute.freelancer;
         } else {
-            // AcceptAISplit - split according to AI recommendation
             uint256 freelancerAmount = (winnerAmount * dispute.aiRecommendedSplit) / 100;
             uint256 clientAmount = winnerAmount - freelancerAmount;
             
-            require(stablecoin.transfer(dispute.freelancer, freelancerAmount), "Freelancer transfer failed");
-            require(stablecoin.transfer(dispute.client, clientAmount), "Client transfer failed");
+            require(STABLECOIN.transfer(dispute.freelancer, freelancerAmount), "Freelancer transfer failed");
+            require(STABLECOIN.transfer(dispute.client, clientAmount), "Client transfer failed");
             
-            winner = address(0); // Both parties paid
+            winner = address(0);
         }
         
         if (winner != address(0)) {
-            require(stablecoin.transfer(winner, winnerAmount), "Winner payment failed");
+            require(STABLECOIN.transfer(winner, winnerAmount), "Winner payment failed");
         }
         
-        // Pay jurors who voted correctly
         VoteChoice winningVote = dispute.outcome == DisputeOutcome.AcceptAISplit 
             ? VoteChoice.AcceptAI 
             : (dispute.outcome == DisputeOutcome.ClientWins ? VoteChoice.SideWithClient : VoteChoice.SideWithFreelancer);
@@ -286,14 +318,11 @@ contract DisputeJury is ReentrancyGuard {
             address juror = dispute.jurors[i];
             
             if (dispute.hasVoted[juror] && dispute.votes[juror] == winningVote) {
-                require(stablecoin.transfer(juror, perJurorReward), "Juror payment failed");
-                
+                require(STABLECOIN.transfer(juror, perJurorReward), "Juror payment failed");
                 jurors[juror].casesJudged++;
                 jurors[juror].reputationScore += 5;
-                
                 emit RewardDistributed(juror, perJurorReward);
             } else if (dispute.hasVoted[juror]) {
-                // Penalize incorrect votes
                 jurors[juror].reputationScore = jurors[juror].reputationScore > 10 
                     ? jurors[juror].reputationScore - 10 
                     : 0;
@@ -322,13 +351,9 @@ contract DisputeJury is ReentrancyGuard {
     
     function _isJurorInCase(uint256 disputeId, address juror) internal view returns (bool) {
         Dispute storage dispute = disputes[disputeId];
-        
         for (uint256 i = 0; i < dispute.jurors.length; i++) {
-            if (dispute.jurors[i] == juror) {
-                return true;
-            }
+            if (dispute.jurors[i] == juror) return true;
         }
-        
         return false;
     }
     
@@ -340,7 +365,7 @@ contract DisputeJury is ReentrancyGuard {
         address freelancer,
         uint256 amount,
         DisputeOutcome outcome,
-        uint256 votesAcceptAI,
+        uint256 votesAcceptAiResult,
         uint256 votesForClient,
         uint256 votesForFreelancer,
         string memory aiReport
@@ -352,7 +377,7 @@ contract DisputeJury is ReentrancyGuard {
             dispute.freelancer,
             dispute.amount,
             dispute.outcome,
-            dispute.votesAcceptAI,
+            dispute.votesAcceptAi,
             dispute.votesForClient,
             dispute.votesForFreelancer,
             dispute.aiReport
@@ -370,13 +395,7 @@ contract DisputeJury is ReentrancyGuard {
     }
     
     function getActiveJurorCount() external view returns (uint256) {
-        uint256 count = 0;
-        for (uint256 i = 0; i < activeJurors.length; i++) {
-            if (jurors[activeJurors[i]].isActive) {
-                count++;
-            }
-        }
-        return count;
+        return activeJurors.length;
     }
     
     function getDisputeJurors(uint256 disputeId) external view returns (address[] memory) {
@@ -385,7 +404,7 @@ contract DisputeJury is ReentrancyGuard {
     
     // ============ Admin Functions ============
     
-    function setProjectEscrowAddress(address _projectEscrow) external {
+    function setProjectEscrowAddress(address _projectEscrow) external onlyOwner {
         require(projectEscrowAddress == address(0), "Already set");
         projectEscrowAddress = _projectEscrow;
     }
