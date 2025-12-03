@@ -1,244 +1,199 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "openzeppelin-contracts/token/ERC721/ERC721.sol";
-import "openzeppelin-contracts/token/ERC20/IERC20.sol";
-import "openzeppelin-contracts/access/Ownable.sol";
-import "openzeppelin-contracts/utils/ReentrancyGuard.sol";
+import "openzeppelin-contracts/contracts/token/ERC721/ERC721.sol";
+import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import "openzeppelin-contracts/contracts/access/Ownable.sol";
+import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import "./UserRegistry.sol";
+import "./AIOracle.sol";
 
 /**
- * @title SkillTrial
- * @notice Manages paid skill trials with AI scoring and NFT badges
- * @dev Integrates with oracle for AI quality assessment
+ * @title SkillTrial V5
+ * @notice AI-powered skill verification system
+ * @dev Mints NFT badges for successfully passed tests.
  */
 contract SkillTrial is ERC721, Ownable, ReentrancyGuard {
     // ============ State Variables ============
-    
+
     IERC20 public immutable stablecoin;
-    address public oracleAddress;
-    
-    uint256 public trialCounter;
-    uint256 public badgeCounter;
-    
-    enum TrialStatus {
-        Active,
-        Submitted,
-        Scored,
-        Paid,
-        Failed
+    UserRegistry public immutable userRegistry;
+    AIOracle public aiOracle;
+
+    // --- THIS IS THE FIX ---
+    // Removed the invalid 'public' keyword
+    struct SkillTest {
+        string title;
+        string description;
+        string ipfsHash;
+        uint256 fee;
+        bool isActive;
+        uint256 submissionCount;
     }
-    
-    struct Trial {
-        address client;
-        address freelancer;
-        string skillCategory;
-        string taskDescription;
-        uint256 reward;
-        TrialStatus status;
-        uint256 aiScore; // 0-100
-        uint256 createdAt;
+    // --- END FIX ---
+
+    enum SubmissionStatus {
+        Pending,
+        Graded
+    }
+
+    struct Submission {
+        uint256 testId;
+        address applicant;
+        string submissionHash;
+        SubmissionStatus status;
         uint256 submittedAt;
+        uint8 score;
+        string report;
     }
-    
-    struct SkillBadge {
-        string skillCategory;
-        uint256 score;
-        uint256 earnedAt;
-    }
-    
+
     // ============ Storage ============
-    
-    mapping(uint256 => Trial) public trials;
-    mapping(uint256 => SkillBadge) public badges;
+
+    SkillTest[] public skillTests;
+    Submission[] public submissions;
     mapping(address => uint256[]) public freelancerBadges;
-    
+    mapping(uint256 => uint256) public badgeToSubmissionId;
+
+    uint256 public badgeCounter; // We use this to track token IDs
+
     // ============ Events ============
-    
-    event TrialCreated(
-        uint256 indexed trialId,
-        address indexed client,
-        address indexed freelancer,
-        string skillCategory,
-        uint256 reward
-    );
-    event TrialSubmitted(uint256 indexed trialId, uint256 submittedAt);
-    event TrialScored(uint256 indexed trialId, uint256 score);
-    event TrialPaid(uint256 indexed trialId, uint256 amount);
-    event BadgeMinted(uint256 indexed badgeId, address indexed freelancer, string skillCategory, uint256 score);
-    
+
+    event TestCreated(uint256 indexed testId, string title, uint256 fee);
+    event TrialSubmitted(uint256 indexed submissionId, uint256 indexed testId, address indexed applicant);
+    event TrialGraded(uint256 indexed submissionId, uint8 score, uint256 indexed badgeId);
+
     // ============ Errors ============
-    
-    error InvalidReward();
-    error UnauthorizedAccess();
-    error InvalidStatus();
+
     error OnlyOracle();
-    error ScoreTooLow();
+    error OnlyBackend();
+    error TestNotActive();
+    error InsufficientFee();
+    error AlreadySubmitted();
+
+    // ============ Modifiers ============
+
+    modifier onlyAIOracle() {
+        if (msg.sender != address(aiOracle)) revert OnlyOracle();
+        _;
+    }
     
     // ============ Constructor ============
-    
+
     constructor(
         address _stablecoin,
-        address _oracle
+        address _userRegistry,
+        address _aiOracle
     ) ERC721("HumanWork Skill Badge", "HWSKILL") Ownable(msg.sender) {
         stablecoin = IERC20(_stablecoin);
-        oracleAddress = _oracle;
+        userRegistry = UserRegistry(_userRegistry);
+        aiOracle = AIOracle(_aiOracle);
+    }
+
+    // ============ Admin Functions ============
+
+    function createTest(
+        string memory title,
+        string memory description,
+        string memory ipfsHash,
+        uint256 fee
+    ) external onlyOwner {
+        skillTests.push(SkillTest({
+            title: title,
+            description: description,
+            ipfsHash: ipfsHash,
+            fee: fee,
+            isActive: true,
+            submissionCount: 0
+        }));
+        emit TestCreated(skillTests.length - 1, title, fee);
     }
     
-    // ============ External Functions ============
-    
-    /**
-     * @notice Create a new skill trial
-     */
-    function createTrial(
-        address freelancer,
-        string calldata skillCategory,
-        string calldata taskDescription,
-        uint256 reward
-    ) external nonReentrant returns (uint256) {
-        if (reward == 0) revert InvalidReward();
-        
-        // Transfer reward to escrow
-        require(
-            stablecoin.transferFrom(msg.sender, address(this), reward),
-            "Transfer failed"
-        );
-        
-        uint256 trialId = trialCounter++;
-        
-        trials[trialId] = Trial({
-            client: msg.sender,
-            freelancer: freelancer,
-            skillCategory: skillCategory,
-            taskDescription: taskDescription,
-            reward: reward,
-            status: TrialStatus.Active,
-            aiScore: 0,
-            createdAt: block.timestamp,
-            submittedAt: 0
-        });
-        
-        emit TrialCreated(trialId, msg.sender, freelancer, skillCategory, reward);
-        
-        return trialId;
-    }
-    
-    /**
-     * @notice Freelancer submits completed trial work
-     */
-    function submitTrial(uint256 trialId) external {
-        Trial storage trial = trials[trialId];
-        
-        if (msg.sender != trial.freelancer) revert UnauthorizedAccess();
-        if (trial.status != TrialStatus.Active) revert InvalidStatus();
-        
-        trial.status = TrialStatus.Submitted;
-        trial.submittedAt = block.timestamp;
-        
-        emit TrialSubmitted(trialId, block.timestamp);
-    }
-    
-    /**
-     * @notice Oracle calls this to provide AI scoring and trigger payment
-     * @param trialId The trial ID
-     * @param score AI-generated quality score (0-100)
-     */
-    function fulfillAIScoring(uint256 trialId, uint256 score) external nonReentrant {
-        if (msg.sender != oracleAddress) revert OnlyOracle();
-        
-        Trial storage trial = trials[trialId];
-        
-        if (trial.status != TrialStatus.Submitted) revert InvalidStatus();
-        
-        trial.aiScore = score;
-        trial.status = TrialStatus.Scored;
-        
-        emit TrialScored(trialId, score);
-        
-        // If score >= 70, pay freelancer and mint badge
-        if (score >= 70) {
-            trial.status = TrialStatus.Paid;
-            
-            // Pay freelancer
+    // ============ Freelancer Functions ============
+
+    function submitTrial(uint256 testId, string memory submissionHash) external nonReentrant returns (uint256) {
+        SkillTest storage test = skillTests[testId];
+        if (!test.isActive) revert TestNotActive();
+
+        if (test.fee > 0) {
             require(
-                stablecoin.transfer(trial.freelancer, trial.reward),
-                "Payment failed"
-            );
-            
-            emit TrialPaid(trialId, trial.reward);
-            
-            // Mint Skill Badge NFT
-            uint256 badgeId = badgeCounter++;
-            _safeMint(trial.freelancer, badgeId);
-            
-            badges[badgeId] = SkillBadge({
-                skillCategory: trial.skillCategory,
-                score: score,
-                earnedAt: block.timestamp
-            });
-            
-            freelancerBadges[trial.freelancer].push(badgeId);
-            
-            emit BadgeMinted(badgeId, trial.freelancer, trial.skillCategory, score);
-        } else {
-            trial.status = TrialStatus.Failed;
-            
-            // Refund client
-            require(
-                stablecoin.transfer(trial.client, trial.reward),
-                "Refund failed"
+                stablecoin.transferFrom(msg.sender, address(this), test.fee),
+                "Fee transfer failed"
             );
         }
+
+        uint256 submissionId = submissions.length;
+        submissions.push(Submission({
+            testId: testId,
+            applicant: msg.sender,
+            submissionHash: submissionHash,
+            status: SubmissionStatus.Pending,
+            submittedAt: block.timestamp,
+            score: 0,
+            report: ""
+        }));
+
+        test.submissionCount++;
+        
+        // Request grading from the AI Oracle
+        aiOracle.requestSkillGrade(submissionId, msg.sender, submissionHash);
+
+        emit TrialSubmitted(submissionId, testId, msg.sender);
+        return submissionId;
     }
-    
+
+    // ============ Oracle-Only Functions ============
+
+    /**
+     * @notice Mints the skill badge NFT after AI grading
+     * @dev Only callable by the AIOracle contract
+     */
+    function mint(address user, uint256 submissionId, uint8 score, string memory report) external onlyAIOracle nonReentrant {
+        
+        Submission storage sub = submissions[submissionId];
+        
+        // Ensure this submission is pending
+        require(sub.status == SubmissionStatus.Pending, "Submission not pending");
+        
+        sub.status = SubmissionStatus.Graded;
+        sub.score = score;
+        sub.report = report;
+        
+        if (score >= 80) { // Passing score
+            uint256 badgeId = badgeCounter++;
+            
+            _safeMint(user, badgeId);
+            
+            freelancerBadges[user].push(badgeId);
+            badgeToSubmissionId[badgeId] = submissionId;
+
+            // Add positive attestation to UserRegistry
+            userRegistry.addAttestation(user, UserRegistry.AttestationType.SKILL, badgeId);
+
+            emit TrialGraded(submissionId, score, badgeId);
+        } else {
+            // Add negative attestation? Or just no badge.
+            // For now, just graded, no badge.
+            emit TrialGraded(submissionId, score, type(uint256).max); // No badge minted
+        }
+    }
+
     // ============ View Functions ============
-    
-    function getTrial(uint256 trialId) external view returns (
-        address client,
-        address freelancer,
-        string memory skillCategory,
-        uint256 reward,
-        TrialStatus status,
-        uint256 aiScore
-    ) {
-        Trial storage trial = trials[trialId];
-        return (
-            trial.client,
-            trial.freelancer,
-            trial.skillCategory,
-            trial.reward,
-            trial.status,
-            trial.aiScore
-        );
+
+    function getTest(uint256 testId) external view returns (SkillTest memory) {
+        return skillTests[testId];
     }
-    
-    function getFreelancerBadges(address freelancer) external view returns (uint256[] memory) {
-        return freelancerBadges[freelancer];
+
+    function getSubmission(uint256 submissionId) external view returns (Submission memory) {
+        return submissions[submissionId];
     }
-    
-    function getBadge(uint256 badgeId) external view returns (
-        string memory skillCategory,
-        uint256 score,
-        uint256 earnedAt
-    ) {
-        SkillBadge storage badge = badges[badgeId];
-        return (badge.skillCategory, badge.score, badge.earnedAt);
+
+    function getFreelancerBadges(address user) external view returns (uint256[] memory) {
+        return freelancerBadges[user];
     }
-    
+
     // ============ Admin Functions ============
     
-    function updateOracle(address _newOracle) external onlyOwner {
-        oracleAddress = _newOracle;
-    }
-    
-    function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        _requireOwned(tokenId);
-        
-        SkillBadge storage badge = badges[tokenId];
-        
-        // In production, return proper metadata URI
-        return string(abi.encodePacked(
-            "https://api.humanwork.io/badge/",
-            Strings.toString(tokenId)
-        ));
+    function setAIOracle(address _aiOracle) external onlyOwner {
+        aiOracle = AIOracle(_aiOracle);
     }
 }

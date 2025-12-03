@@ -2,169 +2,138 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
-import "../src/interfaces/IZKVerifier.sol";
 import "../src/UserRegistry.sol";
-import "../src/ProjectEscrow.sol";
+import "../src/AgencyRegistry.sol";
+import "../src/AIOracle.sol";
 import "../src/SkillTrial.sol";
-import "../src/DisputeJury.sol";
-import "../src/InsurancePool.sol";
-import "../src/GasSponsor.sol";
+import "../src/ProjectEscrow.sol";
 import "../src/EnterpriseAccess.sol";
+import "../src/DisputeJury.sol";
+import "../src/GasSponsor.sol";
+import "../src/InsurancePool.sol";
 
-/**
- * @title Deploy
- * @notice Complete deployment script for HumanWork Protocol
- * @dev Deploys all contracts in correct order with proper initialization
- */
-contract Deploy is Script {
-    // Deployed contract addresses
-    address public zkVerifier;
-    address public stablecoin;
-    UserRegistry public userRegistry;
-    ProjectEscrow public projectEscrow;
-    SkillTrial public skillTrial;
-    DisputeJury public disputeJury;
-    InsurancePool public insurancePool;
-    GasSponsor public gasSponsor;
-    EnterpriseAccess public enterpriseAccess;
+contract DeployProtocol is Script {
+    // --- FIX: Replaced 0x... with address(0) as a placeholder ---
+    address public constant STABLECOIN_ADDRESS = address(0); // REPLACE
+    address public constant ZK_VERIFIER_ADDRESS = address(0); // REPLACE
     
-    address public oracle;
-    
+    // This will be your backend/admin wallet that controls the AI Oracle
+    // and other admin functions.
+    address public oracleAdmin; 
+
     function run() external {
-        // Load environment variables
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
-        
-        // Load external addresses (these should be deployed separately or mock addresses for testing)
-        zkVerifier = vm.envAddress("ZK_VERIFIER_ADDRESS");
-        stablecoin = vm.envAddress("STABLECOIN_ADDRESS"); // e.g., USDC on Hedera
-        oracle = vm.envAddress("ORACLE_ADDRESS"); // Chainlink/Pyth oracle
-        
-        console.log("=====================================");
-        console.log("HumanWork Protocol Deployment");
-        console.log("=====================================");
-        console.log("Deployer:", deployer);
-        console.log("Network: Hedera Testnet");
-        console.log("ZK Verifier:", zkVerifier);
-        console.log("Stablecoin:", stablecoin);
-        console.log("Oracle:", oracle);
-        console.log("=====================================");
-        
+        oracleAdmin = vm.envAddress("ORACLE_ADDRESS");
+
         vm.startBroadcast(deployerPrivateKey);
-        
-        // ============ Step 1: Deploy GasSponsor ============
-        console.log("\n1. Deploying GasSponsor...");
-        gasSponsor = new GasSponsor(stablecoin);
-        console.log("   GasSponsor deployed at:", address(gasSponsor));
-        
-        // ============ Step 2: Deploy UserRegistry ============
-        console.log("\n2. Deploying UserRegistry...");
-        userRegistry = new UserRegistry(
-            zkVerifier,
-            stablecoin,
+
+        // ============ 1. DEPLOY CORE MODULES ============
+        console.log("Deploying Core Modules...");
+
+        GasSponsor gasSponsor = new GasSponsor(STABLECOIN_ADDRESS);
+        console.log("  + GasSponsor deployed to:", address(gasSponsor));
+
+        InsurancePool insurancePool = new InsurancePool(STABLECOIN_ADDRESS);
+        console.log("  + InsurancePool deployed to:", address(insurancePool));
+
+        // ============ 2. DEPLOY IDENTITY & AI LAYER (L1) ============
+        console.log("\nDeploying Identity & AI Layer (L1)...");
+
+        UserRegistry userRegistry = new UserRegistry(
+            ZK_VERIFIER_ADDRESS,
+            STABLECOIN_ADDRESS,
             address(gasSponsor)
         );
-        console.log("   UserRegistry deployed at:", address(userRegistry));
-        
-        // ============ Step 3: Deploy DisputeJury ============
-        console.log("\n3. Deploying DisputeJury...");
-        disputeJury = new DisputeJury(
-            stablecoin,
+        console.log("  + UserRegistry deployed to:", address(userRegistry));
+
+        AgencyRegistry agencyRegistry = new AgencyRegistry(
+            STABLECOIN_ADDRESS,
             address(userRegistry)
         );
-        console.log("   DisputeJury deployed at:", address(disputeJury));
-        
-        // ============ Step 4: Deploy ProjectEscrow ============
-        console.log("\n4. Deploying ProjectEscrow...");
-        projectEscrow = new ProjectEscrow(
-            stablecoin,
+        console.log("  + AgencyRegistry deployed to:", address(agencyRegistry));
+
+        AIOracle aiOracle = new AIOracle();
+        console.log("  + AIOracle deployed to:", address(aiOracle));
+
+        SkillTrial skillTrial = new SkillTrial(
+            STABLECOIN_ADDRESS,
+            address(aiOracle),
             address(userRegistry)
         );
-        console.log("   ProjectEscrow deployed at:", address(projectEscrow));
-        
-        // ============ Step 5: Deploy SkillTrial ============
-        console.log("\n5. Deploying SkillTrial...");
-        skillTrial = new SkillTrial(
-            stablecoin,
-            oracle
+        console.log("  + SkillTrial deployed to:", address(skillTrial));
+
+        // ============ 3. DEPLOY COMMERCE & DISPUTE LAYER (L2) ============
+        console.log("\nDeploying Commerce & Dispute Layer (L2)...");
+
+        DisputeJury disputeJury = new DisputeJury(
+            STABLECOIN_ADDRESS,
+            address(userRegistry)
         );
-        console.log("   SkillTrial deployed at:", address(skillTrial));
-        
-        // ============ Step 6: Deploy InsurancePool ============
-        console.log("\n6. Deploying InsurancePool...");
-        insurancePool = new InsurancePool(stablecoin);
-        console.log("   InsurancePool deployed at:", address(insurancePool));
-        
-        // ============ Step 7: Deploy EnterpriseAccess ============
-        console.log("\n7. Deploying EnterpriseAccess...");
-        enterpriseAccess = new EnterpriseAccess(stablecoin);
-        console.log("   EnterpriseAccess deployed at:", address(enterpriseAccess));
-        
-        // ============ Post-Deployment Configuration ============
-        console.log("\n=====================================");
-        console.log("Post-Deployment Configuration");
-        console.log("=====================================");
-        
-        // Link DisputeJury to ProjectEscrow
-        console.log("\n8. Linking DisputeJury to ProjectEscrow...");
-        disputeJury.setProjectEscrowAddress(address(projectEscrow));
-        console.log("    - DisputeJury linked");
-        
-        // Link ProjectEscrow to DisputeJury
-        console.log("\n9. Linking ProjectEscrow to DisputeJury...");
-        projectEscrow.setDisputeJuryAddress(address(disputeJury));
-        console.log("   - ProjectEscrow linked");
-        
-        // Authorize contracts in GasSponsor
-        console.log("\n10. Authorizing contracts in GasSponsor...");
+        console.log("  + DisputeJury deployed to:", address(disputeJury));
+
+        EnterpriseAccess enterpriseAccess = new EnterpriseAccess(
+            STABLECOIN_ADDRESS
+        );
+        console.log("  + EnterpriseAccess deployed to:", address(enterpriseAccess));
+
+        ProjectEscrow projectEscrow = new ProjectEscrow(
+            STABLECOIN_ADDRESS,
+            address(userRegistry),
+            address(agencyRegistry),
+            address(enterpriseAccess),
+            address(disputeJury),
+            address(aiOracle)
+        );
+        console.log("  + ProjectEscrow deployed to:", address(projectEscrow));
+
+        // ============ 4. SET PERMISSIONS & AUTHORIZATIONS ============
+        console.log("\nSetting Permissions & Authorizations...");
+
+        // --- AIOracle (The Brain) ---
+        // 1. Set the Oracle's admin/owner (your backend server)
+        aiOracle.transferOwnership(oracleAdmin);
+        console.log("  + AIOracle ownership transferred to:", oracleAdmin);
+        // 2. Authorize AIOracle to call AgencyRegistry
+        aiOracle.setCallbackAddress(address(agencyRegistry), true);
+        console.log("  + AIOracle updated with AgencyRegistry");
+        // 3. Authorize AIOracle to call SkillTrial
+        aiOracle.setCallbackAddress(address(skillTrial), true);
+        console.log("  + AIOracle updated with SkillTrial");
+        // 4. Authorize AIOracle to call ProjectEscrow (for dispute reports)
+        aiOracle.setCallbackAddress(address(projectEscrow), true);
+        console.log("  + AIOracle updated with ProjectEscrow");
+
+        // --- AgencyRegistry (B2B Identity) ---
+        // Authorize the AIOracle to set GST verification status
+        agencyRegistry.setAIOracle(address(aiOracle));
+        console.log("  + AgencyRegistry updated with AIOracle");
+
+        // --- SkillTrial (Vetting) ---
+        // Authorize the AIOracle to mint badges
+        skillTrial.setAuthorizedOracle(address(aiOracle));
+        console.log("  + SkillTrial updated with AIOracle");
+
+        // --- UserRegistry (Attestations) ---
+        // 1. Authorize ProjectEscrow to add PROJECT attestations
+        userRegistry.setAuthorizedCaller(address(projectEscrow), true);
+        console.log("  + UserRegistry updated for ProjectEscrow");
+        // 2. Authorize SkillTrial to add SKILL attestations
+        userRegistry.setAuthorizedCaller(address(skillTrial), true);
+        console.log("  + UserRegistry updated for SkillTrial");
+
+        // --- ProjectEscrow (Commerce) ---
+        // Authorize ProjectEscrow to create Attestations
+        projectEscrow.setAuthorizedCaller(address(userRegistry), true);
+        console.log("  + ProjectEscrow updated with UserRegistry");
+
+        // --- GasSponsor ---
+        // Authorize UserRegistry to receive deposits
         gasSponsor.authorizeContract(address(userRegistry), true);
-        gasSponsor.authorizeContract(address(projectEscrow), true);
-        gasSponsor.authorizeContract(address(skillTrial), true);
-        console.log("   - Contracts authorized");
-        
+        console.log("  + GasSponsor updated for UserRegistry");
+
         vm.stopBroadcast();
         
-        // ============ Deployment Summary ============
-        console.log("\n=====================================");
-        console.log("DEPLOYMENT COMPLETE");
-        console.log("=====================================");
-        console.log("UserRegistry:      ", address(userRegistry));
-        console.log("ProjectEscrow:     ", address(projectEscrow));
-        console.log("SkillTrial:        ", address(skillTrial));
-        console.log("DisputeJury:       ", address(disputeJury));
-        console.log("InsurancePool:     ", address(insurancePool));
-        console.log("GasSponsor:        ", address(gasSponsor));
-        console.log("EnterpriseAccess:  ", address(enterpriseAccess));
-        console.log("=====================================");
-        
-        // Save deployment addresses to file
-        _saveDeployment();
-    }
-    
-    function _saveDeployment() internal {
-        string memory json = string(abi.encodePacked(
-            '{\n',
-            '  "network": "hedera_testnet",\n',
-            '  "timestamp": ', vm.toString(block.timestamp), ',\n',
-            '  "deployer": "', vm.toString(msg.sender), '",\n',
-            '  "contracts": {\n',
-            '    "UserRegistry": "', vm.toString(address(userRegistry)), '",\n',
-            '    "ProjectEscrow": "', vm.toString(address(projectEscrow)), '",\n',
-            '    "SkillTrial": "', vm.toString(address(skillTrial)), '",\n',
-            '    "DisputeJury": "', vm.toString(address(disputeJury)), '",\n',
-            '    "InsurancePool": "', vm.toString(address(insurancePool)), '",\n',
-            '    "GasSponsor": "', vm.toString(address(gasSponsor)), '",\n',
-            '    "EnterpriseAccess": "', vm.toString(address(enterpriseAccess)), '"\n',
-            '  },\n',
-            '  "external": {\n',
-            '    "zkVerifier": "', vm.toString(zkVerifier), '",\n',
-            '    "stablecoin": "', vm.toString(stablecoin), '",\n',
-            '    "oracle": "', vm.toString(oracle), '"\n',
-            '  }\n',
-            '}\n'
-        ));
-        
-        vm.writeFile("deployments/hedera_testnet.json", json);
-        console.log("\n- Deployment addresses saved to deployments/hedera_testnet.json");
+        // --- FIX: Replaced invalid '✅' character with '+' ---
+        console.log("\n+ HumanWork Protocol V5 Deployed Successfully!");
     }
 }

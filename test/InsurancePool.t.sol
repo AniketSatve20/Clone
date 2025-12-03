@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../src/InsurancePool.sol";
 import "forge-std/Test.sol";
+import "../src/InsurancePool.sol";
+
+// --- THIS IS THE FIX ---
 import "./UserRegistry.t.sol";
+// --- END FIX ---
 
 contract InsurancePoolTest is Test {
     InsurancePool public insurance;
@@ -17,18 +20,20 @@ contract InsurancePoolTest is Test {
         
         usdc.mint(client, 10000 * 10**6);
 
-        usdc.mint(address(insurance), 100000 * 10**6); // Fund with 100,000 USDC
+        // --- ADDED FIX ---
+        // Fund the pool so it can pay claims
+        usdc.mint(address(insurance), 10000 * 10**6);
+        // --- END FIX ---
     }
     
     function testBuyInsurance() public {
         vm.prank(client);
-        usdc.approve(address(insurance), 50 * 10**6); // 5% of 1000 USDC
+        usdc.approve(address(insurance), 50 * 10**6);
         
         vm.prank(client);
         uint256 policyId = insurance.buyInsurance(1, 1000 * 10**6);
         
-        (address holder, uint256 projectId, uint256 coverage,,,) = 
-            insurance.getPolicy(policyId);
+        (address holder, uint256 projectId, uint256 coverage,,,) = insurance.getPolicy(policyId);
         
         assertEq(holder, client);
         assertEq(projectId, 1);
@@ -49,5 +54,17 @@ contract InsurancePoolTest is Test {
         
         uint256 balanceAfter = usdc.balanceOf(client);
         assertEq(balanceAfter - balanceBefore, 500 * 10**6);
+    }
+    
+    function testCannotClaimMoreThanCoverage() public {
+        vm.prank(client);
+        usdc.approve(address(insurance), 50 * 10**6);
+        
+        vm.prank(client);
+        uint256 policyId = insurance.buyInsurance(1, 1000 * 10**6);
+        
+        vm.prank(client);
+        vm.expectRevert(InsurancePool.ClaimExceedsCoverage.selector);
+        insurance.fileClaim(policyId, 1500 * 10**6);
     }
 }

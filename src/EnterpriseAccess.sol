@@ -1,190 +1,150 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "openzeppelin-contracts/token/ERC721/ERC721.sol";
-import "openzeppelin-contracts/token/ERC20/IERC20.sol";
-import "openzeppelin-contracts/access/Ownable.sol";
-import "openzeppelin-contracts/utils/ReentrancyGuard.sol";
+import "openzeppelin-contracts/contracts/token/ERC721/ERC721.sol";
+import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import "openzeppelin-contracts/contracts/access/Ownable.sol";
+import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import "./AgencyRegistry.sol";
 
 /**
- * @title EnterpriseAccess
- * @notice B2B SaaS subscription management via NFTs
- * @dev Enterprises pay in stablecoin, receive subscription NFT, manage team access
+ * @title EnterpriseAccess V5
+ * @notice Dual-Sided SaaS NFT Subscription
+ * @dev Sells Client NFTs and Agency NFTs
  */
 contract EnterpriseAccess is ERC721, Ownable, ReentrancyGuard {
     // ============ State Variables ============
-    
+
     IERC20 public immutable stablecoin;
-    
-    uint256 public constant MONTHLY_FEE = 500 * 10**6; // 500 USDC
-    uint256 public constant ANNUAL_FEE = 5000 * 10**6; // 5000 USDC (2 months free)
-    
+    AgencyRegistry public immutable agencyRegistry;
+
+    uint256 public constant CLIENT_MONTHLY_FEE = 500 * 10**6;
+    uint256 public constant CLIENT_ANNUAL_FEE = 5000 * 10**6;
+    uint256 public constant AGENCY_MONTHLY_FEE = 100 * 10**6;
+    uint256 public constant AGENCY_ANNUAL_FEE = 1000 * 10**6;
+
     uint256 public subscriptionCounter;
-    
-    enum SubscriptionTier {
+
+    enum Tier {
         None,
-        Monthly,
-        Annual
+        ClientMonthly,
+        ClientAnnual,
+        AgencyMonthly,
+        AgencyAnnual
     }
-    
+
+    enum SubscriptionStatus {
+        Active,
+        GracePeriod,
+        Expired,
+        Cancelled
+    }
+
     struct Subscription {
         address admin;
-        SubscriptionTier tier;
+        string companyName;
+        Tier tier;
+        SubscriptionStatus status;
         uint256 startTime;
         uint256 expiryTime;
-        bool isActive;
         address[] managers;
         mapping(address => bool) isManager;
-        uint256 totalSpent;
-        uint256 projectsCreated;
     }
-    
+
     // ============ Storage ============
-    
+
     mapping(uint256 => Subscription) public subscriptions;
     mapping(address => uint256) public adminToSubscription;
-    mapping(address => uint256[]) public userSubscriptions; // Track all subscriptions user is part of
-    
-    uint256 public totalRevenue;
-    
+    mapping(address => bool) public enterpriseUsers; // Admin or Manager
+
     // ============ Events ============
-    
-    event SubscriptionCreated(
-        uint256 indexed subscriptionId,
-        address indexed admin,
-        SubscriptionTier tier,
-        uint256 expiryTime
-    );
-    event SubscriptionRenewed(uint256 indexed subscriptionId, uint256 newExpiryTime);
+
+    event SubscriptionCreated(uint256 indexed subscriptionId, address indexed admin, Tier tier);
     event ManagerAdded(uint256 indexed subscriptionId, address indexed manager);
     event ManagerRemoved(uint256 indexed subscriptionId, address indexed manager);
-    event SubscriptionCancelled(uint256 indexed subscriptionId);
-    
+
     // ============ Errors ============
-    
+
     error AlreadyHasSubscription();
     error InvalidTier();
     error NotAdmin();
     error SubscriptionExpired();
     error ManagerAlreadyExists();
     error ManagerNotFound();
-    error NotEnterpriseUser();
-    
+
     // ============ Constructor ============
-    
-    constructor(address _stablecoin) 
-        ERC721("HumanWork Enterprise Subscription", "HWENT") 
-        Ownable(msg.sender) 
-    {
+
+    constructor(
+        address _stablecoin,
+        address _agencyRegistry
+    ) ERC721("HumanWork Enterprise", "HWENT") Ownable(msg.sender) {
         stablecoin = IERC20(_stablecoin);
+        agencyRegistry = AgencyRegistry(_agencyRegistry);
     }
-    
+
     // ============ External Functions ============
-    
-    /**
-     * @notice Purchase enterprise subscription
-     * @param tier The subscription tier (1 = Monthly, 2 = Annual)
-     */
-    function subscribe(SubscriptionTier tier) external nonReentrant returns (uint256) {
+
+    // --- THIS IS THE V2 (2-ARGUMENT) FUNCTION ---
+    function subscribe(
+        Tier tier,
+        string calldata companyName
+    ) external nonReentrant returns (uint256) {
         if (adminToSubscription[msg.sender] != 0) revert AlreadyHasSubscription();
-        if (tier == SubscriptionTier.None) revert InvalidTier();
-        
-        uint256 fee = tier == SubscriptionTier.Monthly ? MONTHLY_FEE : ANNUAL_FEE;
-        uint256 duration = tier == SubscriptionTier.Monthly ? 30 days : 365 days;
-        
-        // Transfer subscription fee
+
+        uint256 fee = _getTierFee(tier);
+        uint256 duration = _getTierDuration(tier);
+        if (fee == 0) revert InvalidTier();
+
         require(
             stablecoin.transferFrom(msg.sender, address(this), fee),
             "Payment failed"
         );
-        
-        // --- THIS IS THE FIX ---
-        // Change from subscriptionCounter++ (post-increment)
-        // to ++subscriptionCounter (pre-increment)
-        // This makes the first subscriptionId = 1, not 0.
+
         uint256 subscriptionId = ++subscriptionCounter;
-        // --- END FIX ---
-        
-        // Mint subscription NFT to admin
+
         _safeMint(msg.sender, subscriptionId);
-        
+
         Subscription storage sub = subscriptions[subscriptionId];
         sub.admin = msg.sender;
+        sub.companyName = companyName;
         sub.tier = tier;
+        sub.status = SubscriptionStatus.Active;
         sub.startTime = block.timestamp;
         sub.expiryTime = block.timestamp + duration;
-        sub.isActive = true;
-        sub.totalSpent = fee;
-        
+
         adminToSubscription[msg.sender] = subscriptionId;
-        userSubscriptions[msg.sender].push(subscriptionId);
-        
-        totalRevenue += fee;
-        
-        emit SubscriptionCreated(subscriptionId, msg.sender, tier, sub.expiryTime);
-        
+        enterpriseUsers[msg.sender] = true; // The admin is an enterprise user
+
+        emit SubscriptionCreated(subscriptionId, msg.sender, tier);
         return subscriptionId;
     }
-    
-    /**
-     * @notice Renew existing subscription
-     */
-    function renewSubscription(uint256 subscriptionId) external nonReentrant {
-        Subscription storage sub = subscriptions[subscriptionId];
-        
-        if (msg.sender != sub.admin) revert NotAdmin();
-        
-        uint256 fee = sub.tier == SubscriptionTier.Monthly ? MONTHLY_FEE : ANNUAL_FEE;
-        uint256 duration = sub.tier == SubscriptionTier.Monthly ? 30 days : 365 days;
-        
-        require(
-            stablecoin.transferFrom(msg.sender, address(this), fee),
-            "Payment failed"
-        );
-        
-        // Extend from current expiry or from now, whichever is later
-        uint256 baseTime = block.timestamp > sub.expiryTime ? block.timestamp : sub.expiryTime;
-        sub.expiryTime = baseTime + duration;
-        sub.isActive = true;
-        sub.totalSpent += fee;
-        totalRevenue += fee;
-        
-        emit SubscriptionRenewed(subscriptionId, sub.expiryTime);
-    }
-    
-    /**
-     * @notice Admin adds a manager to their team
-     */
+    // --- END V2 FUNCTION ---
+
     function addManager(address manager) external {
         uint256 subscriptionId = adminToSubscription[msg.sender];
         if (subscriptionId == 0) revert NotAdmin();
-        
+
         Subscription storage sub = subscriptions[subscriptionId];
-        
-        if (block.timestamp > sub.expiryTime) revert SubscriptionExpired();
+        if (sub.status != SubscriptionStatus.Active) revert SubscriptionExpired();
         if (sub.isManager[manager]) revert ManagerAlreadyExists();
-        
+
         sub.managers.push(manager);
         sub.isManager[manager] = true;
-        userSubscriptions[manager].push(subscriptionId);
-        
+        enterpriseUsers[manager] = true;
+
         emit ManagerAdded(subscriptionId, manager);
     }
-    
-    /**
-     * @notice Admin removes a manager from their team
-     */
+
     function removeManager(address manager) external {
         uint256 subscriptionId = adminToSubscription[msg.sender];
         if (subscriptionId == 0) revert NotAdmin();
-        
+
         Subscription storage sub = subscriptions[subscriptionId];
-        
         if (!sub.isManager[manager]) revert ManagerNotFound();
-        
+
         sub.isManager[manager] = false;
-        
-        // Remove from managers array
+        enterpriseUsers[manager] = false;
+
         for (uint256 i = 0; i < sub.managers.length; i++) {
             if (sub.managers[i] == manager) {
                 sub.managers[i] = sub.managers[sub.managers.length - 1];
@@ -192,136 +152,69 @@ contract EnterpriseAccess is ERC721, Ownable, ReentrancyGuard {
                 break;
             }
         }
-        
         emit ManagerRemoved(subscriptionId, manager);
     }
-    
-    /**
-     * @notice Cancel subscription (does not refund)
-     */
-    function cancelSubscription(uint256 subscriptionId) external {
-        Subscription storage sub = subscriptions[subscriptionId];
-        
-        if (msg.sender != sub.admin) revert NotAdmin();
-        
-        sub.isActive = false;
-        
-        emit SubscriptionCancelled(subscriptionId);
+
+    // ============ V5 INTEGRATION FUNCTIONS ============
+
+    function recordProjectCreated(address user, uint256 projectValue) external {
+        // This is a stub for the v2 blueprint.
+        // We'll add analytics logic here later.
+        // The 'user' and 'projectValue' params are unused for now.
+        // We just need the function to exist for the ProjectEscrow compile.
+        bytes32(projectValue); // Suppress unused variable warning
+        require(enterpriseUsers[user], "Not enterprise user");
     }
-    
-    /**
-     * @notice Increment project counter for analytics
-     */
-    function recordProjectCreated(address user) external {
-        uint256 subscriptionId = _getUserSubscriptionId(user);
-        if (subscriptionId != 0) {
-            subscriptions[subscriptionId].projectsCreated++;
-        }
-    }
-    
+
     // ============ View Functions ============
-    
-    /**
-     * @notice Check if address has enterprise access
-     * @dev Returns true if user is admin or manager of active subscription
-     */
+
     function isEnterpriseUser(address user) external view returns (bool) {
-        // Check if user is admin
-        uint256 adminSub = adminToSubscription[user];
-        if (adminSub != 0) {
-            Subscription storage sub = subscriptions[adminSub];
-            if (sub.isActive && block.timestamp <= sub.expiryTime) {
-                return true;
-            }
-        }
-        
-        // Check if user is manager in any subscription
-        uint256[] memory subs = userSubscriptions[user];
-        for (uint256 i = 0; i < subs.length; i++) {
-            Subscription storage sub = subscriptions[subs[i]];
-            if (sub.isManager[user] && sub.isActive && block.timestamp <= sub.expiryTime) {
-                return true;
-            }
-        }
-        
-        return false;
+        return enterpriseUsers[user];
     }
     
+    function isAgencySubscriber(address user) external view returns (bool) {
+        uint256 subId = adminToSubscription[user];
+        if (subId == 0) return false;
+        Tier tier = subscriptions[subId].tier;
+        return (tier == Tier.AgencyMonthly || tier == Tier.AgencyAnnual);
+    }
+
     function getSubscription(uint256 subscriptionId) external view returns (
         address admin,
-        SubscriptionTier tier,
+        string memory companyName,
+        Tier tier,
+        SubscriptionStatus status,
+        uint256 startTime,
         uint256 expiryTime,
-        bool isActive,
-        uint256 managerCount,
-        uint256 totalSpent,
-        uint256 projectsCreated
+        uint256 managerCount
     ) {
         Subscription storage sub = subscriptions[subscriptionId];
         return (
             sub.admin,
+            sub.companyName,
             sub.tier,
+            sub.status,
+            sub.startTime,
             sub.expiryTime,
-            sub.isActive,
-            sub.managers.length,
-            sub.totalSpent,
-            sub.projectsCreated
+            sub.managers.length
         );
-    }
-    
-    function getManagers(uint256 subscriptionId) external view returns (address[] memory) {
-        return subscriptions[subscriptionId].managers;
-    }
-    
-    function isManager(uint256 subscriptionId, address user) external view returns (bool) {
-        return subscriptions[subscriptionId].isManager[user];
-    }
-    
-    function getUserSubscriptionId(address user) external view returns (uint256) {
-        return _getUserSubscriptionId(user);
     }
     
     // ============ Internal Functions ============
-    
-    function _getUserSubscriptionId(address user) internal view returns (uint256) {
-        // Check if admin
-        uint256 adminSub = adminToSubscription[user];
-        if (adminSub != 0) {
-            return adminSub;
-        }
-        
-        // Check if manager
-        uint256[] memory subs = userSubscriptions[user];
-        for (uint256 i = 0; i < subs.length; i++) {
-            if (subscriptions[subs[i]].isManager[user]) {
-                return subs[i];
-            }
-        }
-        
+
+    function _getTierFee(Tier tier) internal pure returns (uint256) {
+        if (tier == Tier.ClientMonthly) return CLIENT_MONTHLY_FEE;
+        if (tier == Tier.ClientAnnual) return CLIENT_ANNUAL_FEE;
+        if (tier == Tier.AgencyMonthly) return AGENCY_MONTHLY_FEE;
+        if (tier == Tier.AgencyAnnual) return AGENCY_ANNUAL_FEE;
         return 0;
     }
-    
-    // ============ Admin Functions ============
-        
-    /**
-     * @notice Withdraw revenue to protocol treasury
-     */
-    function withdrawRevenue(uint256 amount) external onlyOwner nonReentrant {
-        require(
-            stablecoin.transfer(owner(), amount),
-            "Withdrawal failed"
-        );
-    }
-    
-    function getTotalRevenue() external view returns (uint256) {
-        return totalRevenue;
-    }
-    
-    function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        _requireOwned(tokenId);
-        
-        return string(abi.encodePacked(
-            "https://api.humanwork.io/enterprise/subscription/",
-            Strings.toString(tokenId)
-        ));
+
+    function _getTierDuration(Tier tier) internal pure returns (uint256) {
+        if (tier == Tier.ClientMonthly) return 30 days;
+        if (tier == Tier.ClientAnnual) return 365 days;
+        if (tier == Tier.AgencyMonthly) return 30 days;
+        if (tier == Tier.AgencyAnnual) return 365 days;
+        return 0;
     }
 }

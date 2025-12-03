@@ -1,118 +1,134 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../src/SkillTrial.sol";
 import "forge-std/Test.sol";
+import "../src/SkillTrial.sol";
+import "../src/UserRegistry.sol";
+import "../src/AIOracle.sol";
+import "../src/AgencyRegistry.sol";
+
 import "./UserRegistry.t.sol";
 
 contract SkillTrialTest is Test {
     SkillTrial public skillTrial;
+    UserRegistry public userRegistry;
+    AIOracle public aiOracle;
+    AgencyRegistry public agencyRegistry;
     MockUSDC public usdc;
-    address public oracle;
+    MockZKVerifier public zkVerifier;
     
-    address public client = address(0x1);
+    address public gasSponsor = address(0x888);
+    address public backendServer = address(0x999);
     address public freelancer = address(0x2);
-    
+
     function setUp() public {
         usdc = new MockUSDC();
-        oracle = address(0x999);
+        zkVerifier = new MockZKVerifier();
         
-        skillTrial = new SkillTrial(address(usdc), oracle);
+        // Deploy all V2 dependencies
+        userRegistry = new UserRegistry(address(zkVerifier), address(usdc), gasSponsor);
+        agencyRegistry = new AgencyRegistry(address(usdc), address(userRegistry));
         
-        usdc.mint(client, 10000 * 10**6);
-    }
-    
-    function testCreateTrial() public {
-        vm.prank(client);
-        usdc.approve(address(skillTrial), 50 * 10**6);
+        // Deploy AIOracle, but SkillTrial address is 0 for now
+        aiOracle = new AIOracle(address(agencyRegistry), address(0));
         
-        vm.prank(client);
-        uint256 trialId = skillTrial.createTrial(
-            freelancer,
-            "React Development",
-            "Build a todo app",
-            50 * 10**6
+        // Deploy SkillTrial, passing in the AIOracle address
+        skillTrial = new SkillTrial(
+            address(usdc),
+            address(userRegistry),
+            address(aiOracle)
         );
         
-        (address trialClient, address trialFreelancer,,,, uint256 aiScore) = 
-            skillTrial.getTrial(trialId);
+        // --- V2 UPGRADE: Set permissions ---
+        // Tell the AIOracle where the SkillTrial contract is
+        aiOracle.setSkillTrial(address(skillTrial));
         
-        assertEq(trialClient, client);
-        assertEq(trialFreelancer, freelancer);
-        assertEq(aiScore, 0);
+        // --- THIS IS THE FIX ---
+        // We must also transfer ownership of SkillTrial to the backend
+        skillTrial.transferOwnership(backendServer);
+        // --- END FIX ---
+        
+        aiOracle.transferOwnership(backendServer);
+        
+        // Authorize SkillTrial to add attestations
+        userRegistry.setAuthorizedCaller(address(skillTrial), true);
+
+        // Fund freelancer
+        usdc.mint(freelancer, 1000 * 10**6);
+
+        // Freelancer must be registered to take a test
+        vm.prank(freelancer);
+        userRegistry.registerBasic();
     }
-    
+
+    function testCreateTest() public {
+        vm.prank(backendServer); // Only owner (backend) can create tests
+        skillTrial.createTest(
+            "Solidity v0.8.20 Test",
+            "A test for advanced Solidity features",
+            "ipfs://CID_FOR_TEST_DATA",
+            10 * 10**6 // 10 USDC fee
+        );
+        
+        SkillTrial.SkillTest memory test = skillTrial.getTest(0);
+        assertEq(test.title, "Solidity v0.8.20 Test");
+        assertEq(test.fee, 10 * 10**6);
+    }
+
     function testSubmitTrial() public {
-        vm.prank(client);
-        usdc.approve(address(skillTrial), 50 * 10**6);
-        
-        vm.prank(client);
-        uint256 trialId = skillTrial.createTrial(
-            freelancer,
-            "React Development",
-            "Build a todo app",
-            50 * 10**6
-        );
+        // 1. Backend creates the test
+        vm.prank(backendServer);
+        skillTrial.createTest("Solidity Test", "Test", "ipfs://...", 10 * 10**6);
+
+        // 2. Freelancer approves USDC fee and submits
+        vm.prank(freelancer);
+        usdc.approve(address(skillTrial), 10 * 10**6);
         
         vm.prank(freelancer);
-        skillTrial.submitTrial(trialId);
-        
-        (,,,, SkillTrial.TrialStatus status,) = skillTrial.getTrial(trialId);
-        assertEq(uint(status), uint(SkillTrial.TrialStatus.Submitted));
+        uint256 submissionId = skillTrial.submitTrial(0, "ipfs://CID_FOR_SUBMISSION");
+
+        // 3. Check that the submission is recorded
+        SkillTrial.Submission memory sub = skillTrial.getSubmission(submissionId);
+        assertEq(sub.testId, 0);
+        assertEq(sub.applicant, freelancer);
+        assertEq(uint(sub.status), uint(SkillTrial.SubmissionStatus.Pending));
     }
-    
-    function testFulfillAIScoringPass() public {
-        // Create and submit trial
-        vm.prank(client);
-        usdc.approve(address(skillTrial), 50 * 10**6);
-        
-        vm.prank(client);
-        uint256 trialId = skillTrial.createTrial(
-            freelancer,
-            "React Development",
-            "Build a todo app",
-            50 * 10**6
-        );
-        
+
+    // --- NEW V2 TEST ---
+    function testFulfillSkillGrade() public {
+        // 1. Backend creates the test
+        vm.prank(backendServer);
+        skillTrial.createTest("Solidity Test", "Test", "ipfs://...", 10 * 10**6);
+
+        // 2. Freelancer submits
         vm.prank(freelancer);
-        skillTrial.submitTrial(trialId);
-        
-        // Oracle fulfills with passing score
-        uint256 balanceBefore = usdc.balanceOf(freelancer);
-        
-        vm.prank(oracle);
-        skillTrial.fulfillAIScoring(trialId, 85);
-        
-        uint256 balanceAfter = usdc.balanceOf(freelancer);
-        assertEq(balanceAfter - balanceBefore, 50 * 10**6);
-        
-        // Check badge minted
-        uint256[] memory badges = skillTrial.getFreelancerBadges(freelancer);
-        assertEq(badges.length, 1);
-    }
-    
-    function testFulfillAIScoringFail() public {
-        vm.prank(client);
-        usdc.approve(address(skillTrial), 50 * 10**6);
-        
-        vm.prank(client);
-        uint256 trialId = skillTrial.createTrial(
-            freelancer,
-            "React Development",
-            "Build a todo app",
-            50 * 10**6
-        );
-        
+        usdc.approve(address(skillTrial), 10 * 10**6);
         vm.prank(freelancer);
-        skillTrial.submitTrial(trialId);
+        uint256 submissionId = skillTrial.submitTrial(0, "ipfs://CID_FOR_SUBMISSION");
         
-        // Oracle fulfills with failing score
-        uint256 clientBalanceBefore = usdc.balanceOf(client);
+        // 3. AIOracle (via backend) requests the grade from the AIOracle contract
+        // (This step is simulated by the backend just calling fulfill directly in this test)
         
-        vm.prank(oracle);
-        skillTrial.fulfillAIScoring(trialId, 50);
+        // 4. Backend (as owner of AIOracle) fulfills the grade
+        vm.prank(backendServer);
+        aiOracle.fulfillSkillGrade(
+            submissionId,
+            submissionId,
+            freelancer,
+            95, // Score
+            "Excellent work, passed all security checks."
+        );
+
+        // 5. Check that the badge was minted
+        assertEq(skillTrial.ownerOf(0), freelancer); // Token ID 0
         
-        uint256 clientBalanceAfter = usdc.balanceOf(client);
-        assertEq(clientBalanceAfter - clientBalanceBefore, 50 * 10**6);
+        // 6. Check that an attestation was added to the user's profile
+        assertEq(userRegistry.getAttestationCount(freelancer), 1);
+        assertEq(userRegistry.getPositiveAttestationCount(freelancer), 1);
+
+        // 7. Check submission status
+        SkillTrial.Submission memory sub = skillTrial.getSubmission(submissionId);
+        assertEq(uint(sub.status), uint(SkillTrial.SubmissionStatus.Graded));
+        assertEq(sub.score, 95);
     }
 }

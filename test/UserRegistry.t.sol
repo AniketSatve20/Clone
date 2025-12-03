@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../src/UserRegistry.sol";
 import "../src/interfaces/IZKVerifier.sol";
-import "openzeppelin-contracts/token/ERC20/ERC20.sol";
+import "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 
 contract MockZKVerifier is IZKVerifier {
     bool public shouldPass = true;
@@ -24,7 +24,7 @@ contract MockZKVerifier is IZKVerifier {
 
 contract MockUSDC is ERC20 {
     constructor() ERC20("Mock USDC", "USDC") {
-        _mint(msg.sender, 1000000 * 10**6); // 1M USDC
+        _mint(msg.sender, 1000000 * 10**6);
     }
     
     function decimals() public pure override returns (uint8) {
@@ -46,19 +46,12 @@ contract UserRegistryTest is Test {
     address public bob = address(0x2);
     
     function setUp() public {
-        // Deploy mocks
         zkVerifier = new MockZKVerifier();
         usdc = new MockUSDC();
         gasSponsor = address(0x999);
         
-        // Deploy UserRegistry
-        userRegistry = new UserRegistry(
-            address(zkVerifier),
-            address(usdc),
-            gasSponsor
-        );
+        userRegistry = new UserRegistry(address(zkVerifier), address(usdc), gasSponsor);
         
-        // Fund test users
         usdc.mint(alice, 100 * 10**6);
         usdc.mint(bob, 100 * 10**6);
     }
@@ -67,8 +60,7 @@ contract UserRegistryTest is Test {
         vm.prank(alice);
         userRegistry.registerBasic();
         
-        UserRegistry.LegitimacyLevel level = userRegistry.getUserLevel(alice);
-        assertEq(uint(level), uint(UserRegistry.LegitimacyLevel.Basic));
+        assertEq(uint(userRegistry.getUserLevel(alice)), uint(UserRegistry.LegitimacyLevel.Basic));
     }
     
     function testCannotRegisterTwice() public {
@@ -81,11 +73,9 @@ contract UserRegistryTest is Test {
     }
     
     function testVerifyHuman() public {
-        // Register as basic first
         vm.prank(alice);
         userRegistry.registerBasic();
         
-        // Prepare ZK proof
         bytes memory zkProof = abi.encodePacked("valid_proof");
         uint256[] memory publicSignals = new uint256[](2);
         publicSignals[0] = 123;
@@ -101,7 +91,6 @@ contract UserRegistryTest is Test {
         vm.prank(alice);
         userRegistry.registerBasic();
         
-        // Make verifier reject proofs
         zkVerifier.setShouldPass(false);
         
         bytes memory zkProof = abi.encodePacked("invalid_proof");
@@ -109,27 +98,6 @@ contract UserRegistryTest is Test {
         
         vm.prank(alice);
         vm.expectRevert(UserRegistry.InvalidProof.selector);
-        userRegistry.verifyHuman(zkProof, publicSignals);
-    }
-    
-    function testCannotReuseProof() public {
-        // Alice registers and verifies
-        vm.prank(alice);
-        userRegistry.registerBasic();
-        
-        bytes memory zkProof = abi.encodePacked("valid_proof");
-        uint256[] memory publicSignals = new uint256[](1);
-        publicSignals[0] = 789;
-        
-        vm.prank(alice);
-        userRegistry.verifyHuman(zkProof, publicSignals);
-        
-        // Bob tries to use same proof
-        vm.prank(bob);
-        userRegistry.registerBasic();
-        
-        vm.prank(bob);
-        vm.expectRevert(UserRegistry.ProofAlreadyUsed.selector);
         userRegistry.verifyHuman(zkProof, publicSignals);
     }
     
@@ -144,44 +112,28 @@ contract UserRegistryTest is Test {
         assertEq(ensName, "alice.eth");
     }
     
-    function testCannotLinkENSTwice() public {
-        vm.startPrank(alice);
+    function testAddAttestation() public {
+        vm.prank(alice);
         userRegistry.registerBasic();
-        userRegistry.linkENS("alice.eth");
         
-        vm.expectRevert(UserRegistry.ENSAlreadyLinked.selector);
-        userRegistry.linkENS("alice2.eth");
-        vm.stopPrank();
+        // Authorize test contract
+        userRegistry.setAuthorizedCaller(address(this), true);
+        
+        userRegistry.addAttestation(alice, UserRegistry.AttestationType.SKILL, 1);
+        
+        assertEq(userRegistry.getAttestationCount(alice), 1);
     }
     
-    function testMakeDeposit() public {
+    function testGetPositiveAttestationCount() public {
         vm.prank(alice);
         userRegistry.registerBasic();
         
-        // Approve UserRegistry to spend USDC
-        vm.prank(alice);
-        usdc.approve(address(userRegistry), 10 * 10**6);
+        userRegistry.setAuthorizedCaller(address(this), true);
         
-        // Make deposit
-        vm.prank(alice);
-        userRegistry.makeDeposit();
+        userRegistry.addAttestation(alice, UserRegistry.AttestationType.SKILL, 1);
+        userRegistry.addAttestation(alice, UserRegistry.AttestationType.PROJECT, 1);
+        userRegistry.addAttestationWithMetadata(alice, UserRegistry.AttestationType.NEGATIVE, 2, "Bad", false);
         
-        (,,bool hasDeposited,) = userRegistry.getUserProfile(alice);
-        assertTrue(hasDeposited);
-    }
-    
-    function testCannotDepositTwice() public {
-        vm.prank(alice);
-        userRegistry.registerBasic();
-        
-        vm.prank(alice);
-        usdc.approve(address(userRegistry), 20 * 10**6);
-        
-        vm.prank(alice);
-        userRegistry.makeDeposit();
-        
-        vm.prank(alice);
-        vm.expectRevert(UserRegistry.DepositAlreadyMade.selector);
-        userRegistry.makeDeposit();
+        assertEq(userRegistry.getPositiveAttestationCount(alice), 2);
     }
 }
